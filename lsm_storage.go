@@ -26,12 +26,31 @@ type LsmStorageState struct {
 	immMemTables []*mem_table.MemTable
 }
 
+func Create(options *LsmStorageOptions) *LsmStorageState {
+	return &LsmStorageState{
+		RWMutex:      sync.RWMutex{},
+		memTable:     mem_table.Create(0),
+		immMemTables: []*mem_table.MemTable{},
+	}
+}
+
 type LsmStorageInner struct {
-	state      *LsmStorageState
-	// lock ensure only one thread modify LsmStorageState, and rwLock in LsmStorageState to make when one thread is modifing LsmStorageState, other read thread can get kv, so when we need modify LsmStorageState, do `lock.Lock() and rwLock.WLock()`` 
-	lock       sync.Mutex
-	_nextSSTId atomic.Uint64
-	options    *LsmStorageOptions
+	state *LsmStorageState
+	// stateLock ensure only one thread modify LsmStorageState, and rwLock in LsmStorageState to make when one thread is modifing LsmStorageState, other read thread can get kv, so when we need modify LsmStorageState, do `stateLock.Lock() and rwLock.WLock()``
+	stateLock    sync.Mutex
+	path         string
+	currentSSTId atomic.Uint64
+	options      *LsmStorageOptions
+}
+
+func Open(path string, options *LsmStorageOptions) *LsmStorageInner {
+	return &LsmStorageInner{
+		state:        Create(options),
+		stateLock:    sync.Mutex{},
+		path:         path,
+		currentSSTId: atomic.Uint64{},
+		options:      options,
+	}
 }
 
 func (r *LsmStorageInner) Get(key []byte) ([]byte, bool) {
@@ -103,8 +122,8 @@ func (r *LsmStorageInner) forceFreezeMemtable() {
 
 func (r *LsmStorageInner) tryFreeze() {
 	if r.state.memTable.ApproximateSize() >= r.options.TargetSSTSize {
-		r.lock.Lock()
-		defer r.lock.Unlock()
+		r.stateLock.Lock()
+		defer r.stateLock.Unlock()
 
 		// double check in concurrency
 		if r.state.memTable.ApproximateSize() >= r.options.TargetSSTSize {
@@ -114,6 +133,5 @@ func (r *LsmStorageInner) tryFreeze() {
 }
 
 func (r *LsmStorageInner) nextSSTId() uint64 {
-	return r._nextSSTId.Add(1)
+	return r.currentSSTId.Add(1)
 }
-
